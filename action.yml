@@ -1,0 +1,61 @@
+name: 'Local LLM Code Review'
+description: 'Privacy-first code review using a local LLM (Ollama, vLLM, llama.cpp, etc). No data leaves your runner.'
+author: 'fuleinist'
+
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+inputs:
+  api-url:
+    description: 'OpenAI-compatible API URL for the LLM endpoint'
+    required: false
+    default: 'http://localhost:11434/v1'
+  model:
+    description: 'Model name to use'
+    required: false
+    default: 'qwen2.5-coder:7b'
+  api-key:
+    description: 'API key for the endpoint (leave empty for local Ollama)'
+    required: false
+    default: ''
+  max-files:
+    description: 'Maximum number of files to review per PR'
+    required: false
+    default: '30'
+  max-tokens:
+    description: 'Maximum tokens for the LLM response'
+    required: false
+    default: '4096'
+  verbosity:
+    description: 'Output verbosity (quiet, normal, detailed)'
+    required: false
+    default: 'normal'
+  custom-rules:
+    description: 'Additional review rules appended to the system prompt'
+    required: false
+    default: ''
+  skip-label:
+    description: 'PR label that opts out of review'
+    required: false
+    default: 'skip-review'
+  comment-mode:
+    description: 'Comment mode (inline or summary)'
+    required: false
+    default: 'inline'
+  github-token:
+    description: 'GitHub token for posting comments'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  findings-count:
+    description: 'Total number of findings posted'
+  critical-count:
+    description: 'Number of critical findings'
+  review-id:
+    description: 'ID of the posted review'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

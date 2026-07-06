@@ -1,0 +1,49 @@
+name: Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    name: Local LLM Code Review
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout (needed for diff context in some setups)
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Option A: Self-hosted Ollama on the runner
+      - name: Start Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve > /tmp/ollama.log 2>&1 &
+          for i in {1..30}; do
+            curl -s http://localhost:11434/api/tags >/dev/null && break
+            sleep 1
+          done
+          ollama pull qwen2.5-coder:7b
+
+      # Option B: Use a hosted endpoint (comment out Option A if using this)
+      # - name: Configure endpoint
+      #   run: echo "LLM endpoint configured via action inputs"
+
+      - name: Run code review
+        uses: fuleinist/code-review-agent@v1
+        with:
+          api-url: http://localhost:11434/v1
+          model: qwen2.5-coder:7b
+          max-files: 30
+          verbosity: normal
+          comment-mode: inline
+          # custom-rules: |
+          #   - All public APIs need updated docs
+          #   - Require tests for new error paths
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

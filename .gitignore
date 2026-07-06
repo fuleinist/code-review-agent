@@ -1,0 +1,18 @@
+# Build output
+/dist-types
+/dist-tests-build
+/node_modules
+*.log
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Secrets / env
+.env
+.env.local
+
+# Test artifacts
+coverage/
+*.tsbuildinfo
