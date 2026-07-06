@@ -18,6 +18,26 @@ const CATEGORY_EMOJI: Record<string, string> = {
   'api-misuse': '📚',
 };
 
+/**
+ * Decide the commit status state + description for a set of findings.
+ * Pure function, easy to test.
+ *   - critical findings present → 'failure'
+ *   - otherwise                  → 'success'
+ */
+export function commitStatusFor(findings: Finding[]): { state: 'success' | 'failure'; description: string } {
+  const critical = findings.filter((f) => f.severity === 'critical').length;
+  if (critical > 0) {
+    return { state: 'failure', description: `${critical} critical issue${critical === 1 ? '' : 's'}` };
+  }
+  if (findings.length === 0) {
+    return { state: 'success', description: 'No issues found' };
+  }
+  return {
+    state: 'success',
+    description: `${findings.length} non-critical finding${findings.length === 1 ? '' : 's'}`,
+  };
+}
+
 function formatFindingBody(f: Finding): string {
   const lines: string[] = [];
   lines.push(`${SEVERITY_EMOJI[f.severity] || '•'} **${f.severity.toUpperCase()}** — ${CATEGORY_EMOJI[f.category] || '•'} _${f.category}_`);
@@ -83,6 +103,31 @@ export class GitHubClient {
       return true;
     } catch (err: any) {
       console.warn(`Failed to post inline comment on ${finding.file}:${finding.line}: ${err.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Set a commit status on the PR head SHA per SPEC §"Behavior" step 9.
+   * `success` when no actionable findings, `failure` when critical issues present.
+   */
+  async postCommitStatus(state: 'success' | 'failure' | 'pending' | 'error', description: string): Promise<boolean> {
+    if (this.dryRun) {
+      console.log(`[dry-run] would set commit status: ${state} - ${description}`);
+      return true;
+    }
+    try {
+      await this.octokit.rest.repos.createCommitStatus({
+        owner: this.context.owner,
+        repo: this.context.repo,
+        sha: this.context.headSha,
+        state,
+        description,
+        context: 'code-review-agent',
+      });
+      return true;
+    } catch (err: any) {
+      console.warn(`Failed to set commit status: ${err.message}`);
       return false;
     }
   }

@@ -35879,6 +35879,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.GitHubClient = void 0;
+exports.commitStatusFor = commitStatusFor;
 const github = __importStar(__nccwpck_require__(3228));
 const SEVERITY_EMOJI = {
     critical: '🚨',
@@ -35895,6 +35896,25 @@ const CATEGORY_EMOJI = {
     docs: '📝',
     'api-misuse': '📚',
 };
+/**
+ * Decide the commit status state + description for a set of findings.
+ * Pure function, easy to test.
+ *   - critical findings present → 'failure'
+ *   - otherwise                  → 'success'
+ */
+function commitStatusFor(findings) {
+    const critical = findings.filter((f) => f.severity === 'critical').length;
+    if (critical > 0) {
+        return { state: 'failure', description: `${critical} critical issue${critical === 1 ? '' : 's'}` };
+    }
+    if (findings.length === 0) {
+        return { state: 'success', description: 'No issues found' };
+    }
+    return {
+        state: 'success',
+        description: `${findings.length} non-critical finding${findings.length === 1 ? '' : 's'}`,
+    };
+}
 function formatFindingBody(f) {
     const lines = [];
     lines.push(`${SEVERITY_EMOJI[f.severity] || '•'} **${f.severity.toUpperCase()}** — ${CATEGORY_EMOJI[f.category] || '•'} _${f.category}_`);
@@ -35957,6 +35977,31 @@ class GitHubClient {
         }
         catch (err) {
             console.warn(`Failed to post inline comment on ${finding.file}:${finding.line}: ${err.message}`);
+            return false;
+        }
+    }
+    /**
+     * Set a commit status on the PR head SHA per SPEC §"Behavior" step 9.
+     * `success` when no actionable findings, `failure` when critical issues present.
+     */
+    async postCommitStatus(state, description) {
+        if (this.dryRun) {
+            console.log(`[dry-run] would set commit status: ${state} - ${description}`);
+            return true;
+        }
+        try {
+            await this.octokit.rest.repos.createCommitStatus({
+                owner: this.context.owner,
+                repo: this.context.repo,
+                sha: this.context.headSha,
+                state,
+                description,
+                context: 'code-review-agent',
+            });
+            return true;
+        }
+        catch (err) {
+            console.warn(`Failed to set commit status: ${err.message}`);
             return false;
         }
     }
@@ -36141,6 +36186,13 @@ async function run() {
                 core.setOutput('review-id', reviewId);
             core.setOutput('findings-count', 0);
             core.setOutput('critical-count', 0);
+            try {
+                const status = (0, github_1.commitStatusFor)([]);
+                await gh.postCommitStatus(status.state, status.description);
+            }
+            catch (err) {
+                core.warning(`Commit status update failed: ${err.message}`);
+            }
             return;
         }
         const { reviewId, posted, criticalCount: c } = await gh.postFindings(validated, config.commentMode);
@@ -36148,12 +36200,13 @@ async function run() {
         core.setOutput('critical-count', c);
         if (reviewId)
             core.setOutput('review-id', reviewId);
-        // Set commit status
+        // Set commit status per SPEC §"Behavior" step 9
+        const status = (0, github_1.commitStatusFor)(validated);
         try {
-            await new github_1.GitHubClient(config.githubToken, context).postSummaryReview([], 'COMMENT');
+            await gh.postCommitStatus(status.state, status.description);
         }
-        catch {
-            // status update is best-effort
+        catch (err) {
+            core.warning(`Commit status update failed: ${err.message}`);
         }
         core.info(`✅ Posted ${posted} of ${validated.length} findings.`);
         if (c > 0) {
