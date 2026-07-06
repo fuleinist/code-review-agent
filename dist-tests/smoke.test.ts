@@ -1,8 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { detectLanguage, extractAddedLines, countChangedLines } from '../src/diff';
+import { commitStatusFor, GitHubClient } from '../src/github';
 import { LLMClient } from '../src/llm';
 import { applyCustomRules } from '../src/prompts';
+import { Finding } from '../src/types';
+
+function mkFinding(severity: Finding['severity']): Finding {
+  return { file: 'a.ts', severity, category: 'logic', message: 'x' };
+}
 
 test('detectLanguage handles common extensions', () => {
   assert.equal(detectLanguage('foo.ts'), 'typescript');
@@ -84,4 +90,34 @@ test('applyCustomRules appends when non-empty', () => {
 test('applyCustomRules is identity for empty', () => {
   assert.equal(applyCustomRules('base', ''), 'base');
   assert.equal(applyCustomRules('base', '   '), 'base');
+});
+
+test('commitStatusFor returns success for empty findings', () => {
+  const s = commitStatusFor([]);
+  assert.equal(s.state, 'success');
+  assert.equal(s.description, 'No issues found');
+});
+
+test('commitStatusFor returns success for non-critical findings', () => {
+  const s = commitStatusFor([mkFinding('warning'), mkFinding('suggestion')]);
+  assert.equal(s.state, 'success');
+  assert.match(s.description, /2 non-critical/);
+});
+
+test('commitStatusFor returns failure when any finding is critical', () => {
+  const s = commitStatusFor([mkFinding('warning'), mkFinding('critical')]);
+  assert.equal(s.state, 'failure');
+  assert.equal(s.description, '1 critical issue');
+});
+
+test('commitStatusFor pluralizes critical description', () => {
+  const s = commitStatusFor([mkFinding('critical'), mkFinding('critical'), mkFinding('critical')]);
+  assert.equal(s.state, 'failure');
+  assert.equal(s.description, '3 critical issues');
+});
+
+test('GitHubClient.postCommitStatus exists and is callable (signature check)', () => {
+  // Compile-time / runtime sanity: ensure the method is on the prototype
+  // so a future refactor that removes it breaks this test.
+  assert.equal(typeof GitHubClient.prototype.postCommitStatus, 'function');
 });

@@ -1,7 +1,7 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
 import { loadConfig } from './config';
-import { GitHubClient } from './github';
+import { commitStatusFor, GitHubClient } from './github';
 import { LLMClient } from './llm';
 import { applyCustomRules, buildBatchPrompt, buildFilePrompt, SYSTEM_PROMPT } from './prompts';
 import {
@@ -77,6 +77,12 @@ async function run(): Promise<void> {
       if (reviewId) core.setOutput('review-id', reviewId);
       core.setOutput('findings-count', 0);
       core.setOutput('critical-count', 0);
+      try {
+        const status = commitStatusFor([]);
+        await gh.postCommitStatus(status.state, status.description);
+      } catch (err: any) {
+        core.warning(`Commit status update failed: ${err.message}`);
+      }
       return;
     }
 
@@ -85,11 +91,12 @@ async function run(): Promise<void> {
     core.setOutput('critical-count', c);
     if (reviewId) core.setOutput('review-id', reviewId);
 
-    // Set commit status
+    // Set commit status per SPEC §"Behavior" step 9
+    const status = commitStatusFor(validated);
     try {
-      await new GitHubClient(config.githubToken, context).postSummaryReview([], 'COMMENT');
-    } catch {
-      // status update is best-effort
+      await gh.postCommitStatus(status.state, status.description);
+    } catch (err: any) {
+      core.warning(`Commit status update failed: ${err.message}`);
     }
 
     core.info(`✅ Posted ${posted} of ${validated.length} findings.`);
