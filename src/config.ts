@@ -14,6 +14,7 @@ export interface Config {
   skipLabel: string;
   commentMode: CommentMode;
   githubToken: string;
+  ignorePaths: string[];
 }
 
 export function loadConfig(): Config {
@@ -45,6 +46,12 @@ export function loadConfig(): Config {
     throw new Error(`api-url must start with http:// or https://, got: ${apiUrl}`);
   }
 
+  const ignorePathsRaw = core.getInput('ignore-paths', { required: false }) || '';
+  const ignorePaths = ignorePathsRaw
+    .split('\n')
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+
   return {
     apiUrl,
     model: core.getInput('model', { required: false }) || 'qwen2.5-coder:7b',
@@ -56,5 +63,6 @@ export function loadConfig(): Config {
     skipLabel: core.getInput('skip-label', { required: false }) || 'skip-review',
     commentMode,
     githubToken: core.getInput('github-token', { required: false }),
+    ignorePaths,
   };
 }

@@ -78,6 +78,7 @@ That's it. The action posts inline comments on your PR.
 | `model`        | No       | `qwen2.5-coder:7b`       | Model name                               |
 | `api-key`      | No       | (empty)                  | Bearer token for hosted endpoints        |
 | `max-files`    | No       | `30`                     | Max files reviewed per PR (1–200)        |
+| `ignore-paths` | No       | (empty)                  | Newline-separated glob patterns to skip (lockfiles, vendor, generated) |
 | `max-tokens`   | No       | `4096`                   | Max tokens for LLM response (256–32768)  |
 | `verbosity`    | No       | `normal`                 | `quiet`, `normal`, `detailed`            |
 | `custom-rules` | No       | (empty)                  | Extra instructions for the LLM           |

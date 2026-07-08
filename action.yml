@@ -23,6 +23,10 @@ inputs:
     description: 'Maximum number of files to review per PR'
     required: false
     default: '30'
+  ignore-paths:
+    description: 'Newline-separated glob patterns. Files matching any pattern are skipped before the max-files cap (e.g. lockfiles, vendored code, generated bindings).'
+    required: false
+    default: ''
   max-tokens:
     description: 'Maximum tokens for the LLM response'
     required: false

@@ -1,4 +1,5 @@
 import { FileDiff, ReviewContext } from './types';
+import { minimatch } from 'minimatch';
 
 const LANG_BY_EXT: Record<string, string> = {
   ts: 'typescript', tsx: 'typescript',
@@ -101,4 +102,17 @@ export function buildReviewContext(event: any): ReviewContext {
     baseSha: pr.base.sha,
     headSha: pr.head.sha,
   };
+}
+
+/**
+ * Drop files whose repo-relative path matches any glob in `patterns`.
+ * Returns the input unchanged when `patterns` is empty. Cross-platform
+ * path separators are normalised to forward slashes before matching.
+ */
+export function filterIgnoredPaths(files: FileDiff[], patterns: string[]): FileDiff[] {
+  if (patterns.length === 0) return files;
+  return files.filter((f) => {
+    const path = f.filename.replace(/\\/g, '/');
+    return !patterns.some((pattern) => minimatch(path, pattern, { dot: true }));
+  });
 }
