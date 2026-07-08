@@ -7,6 +7,7 @@ import { applyCustomRules, buildBatchPrompt, buildFilePrompt, SYSTEM_PROMPT } fr
 import {
   buildReviewContext,
   extractAddedLines,
+  filterIgnoredPaths,
   parsePullRequestFiles,
 } from './diff';
 import { Finding, FileDiff } from './types';
@@ -38,13 +39,32 @@ async function run(): Promise<void> {
       core.info('No files to review.');
       return;
     }
-    core.info(`Found ${files.length} files (capped at ${config.maxFiles}).`);
+
+    // Apply ignore-paths filter before the max-files cap is reached.
+    // Fetches maxFiles + 100 buffer so we don't miss real files when lots of
+    // generated/lockfile/vendor paths get filtered out.
+    let reviewFiles = files;
+    if (config.ignorePaths.length > 0) {
+      const before = files.length;
+      reviewFiles = filterIgnoredPaths(files, config.ignorePaths);
+      const dropped = before - reviewFiles.length;
+      if (dropped > 0) {
+        core.info(`Ignored ${dropped} file(s) matching ignore-paths (kept ${reviewFiles.length}).`);
+      }
+      reviewFiles = reviewFiles.slice(0, config.maxFiles);
+      if (reviewFiles.length === 0) {
+        core.info('All files were filtered by ignore-paths; nothing to review.');
+        return;
+      }
+    }
+
+    core.info(`Found ${reviewFiles.length} file(s) to review (max-files: ${config.maxFiles}).`);
 
     // Build prompts
     const systemPrompt = applyCustomRules(SYSTEM_PROMPT, config.customRules);
 
     // Decide batching: send small files together, large ones one at a time
-    const batches = createBatches(files);
+    const batches = createBatches(reviewFiles);
 
     const allFindings: Finding[] = [];
     for (let i = 0; i < batches.length; i++) {
@@ -65,7 +85,7 @@ async function run(): Promise<void> {
     }
 
     // Validate line numbers against actual diff
-    const validated = validateLineNumbers(allFindings, files);
+    const validated = validateLineNumbers(allFindings, reviewFiles);
     const criticalCount = validated.filter((f) => f.severity === 'critical').length;
     const warningCount = validated.filter((f) => f.severity === 'warning').length;
 
@@ -112,12 +132,17 @@ async function fetchFiles(config: any, context: any): Promise<FileDiff[]> {
   const octokit = github.getOctokit(config.githubToken);
   const all: any[] = [];
   let page = 1;
-  while (all.length < config.maxFiles) {
+  // When ignore-paths is set, fetch a buffer beyond maxFiles so the filter
+  // doesn't accidentally drop real code when many files are lockfiles/vendored.
+  const fetchCap = config.ignorePaths.length > 0
+    ? config.maxFiles + 100
+    : config.maxFiles;
+  while (all.length < fetchCap) {
     const { data } = await octokit.rest.pulls.listFiles({
       owner: context.owner,
       repo: context.repo,
       pull_number: context.prNumber,
-      per_page: Math.min(100, config.maxFiles - all.length),
+      per_page: Math.min(100, fetchCap - all.length),
       page,
     });
     if (!data || data.length === 0) break;
@@ -125,7 +150,7 @@ async function fetchFiles(config: any, context: any): Promise<FileDiff[]> {
     if (data.length < 100) break;
     page++;
   }
-  return parsePullRequestFiles(all.slice(0, config.maxFiles));
+  return parsePullRequestFiles(all.slice(0, fetchCap));
 }
 
 function createBatches(files: FileDiff[]): FileDiff[][] {

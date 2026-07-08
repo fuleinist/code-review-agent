@@ -4,7 +4,12 @@ import { detectLanguage, extractAddedLines, countChangedLines } from '../src/dif
 import { commitStatusFor, GitHubClient } from '../src/github';
 import { LLMClient } from '../src/llm';
 import { applyCustomRules } from '../src/prompts';
-import { Finding } from '../src/types';
+import { Finding, FileDiff } from '../src/types';
+import { filterIgnoredPaths } from '../src/diff';
+
+function mkFile(filename: string): FileDiff {
+  return { filename, language: 'text', additions: 1, deletions: 0, patch: '@@ -0,0 +1 @@\n+x' };
+}
 
 function mkFinding(severity: Finding['severity']): Finding {
   return { file: 'a.ts', severity, category: 'logic', message: 'x' };
@@ -120,4 +125,46 @@ test('GitHubClient.postCommitStatus exists and is callable (signature check)', (
   // Compile-time / runtime sanity: ensure the method is on the prototype
   // so a future refactor that removes it breaks this test.
   assert.equal(typeof GitHubClient.prototype.postCommitStatus, 'function');
+});
+
+test('filterIgnoredPaths returns all files when no patterns given', () => {
+  const files = [mkFile('src/a.ts'), mkFile('package-lock.json')];
+  assert.deepEqual(filterIgnoredPaths(files, []).map((f) => f.filename), ['src/a.ts', 'package-lock.json']);
+});
+
+test('filterIgnoredPaths drops exact and glob matches', () => {
+  const files = [
+    mkFile('src/index.ts'),
+    mkFile('package-lock.json'),
+    mkFile('yarn.lock'),
+    mkFile('vendor/foo/bar.go'),
+    mkFile('src/gen/api.pb.go'),
+    mkFile('dist/bundle.js'),
+  ];
+  const patterns = [
+    '**/package-lock.json',
+    '**/yarn.lock',
+    '**/vendor/**',
+    '**/*.pb.go',
+    '**/dist/**',
+  ];
+  const kept = filterIgnoredPaths(files, patterns).map((f) => f.filename);
+  assert.deepEqual(kept, ['src/index.ts']);
+});
+
+test('filterIgnoredPaths matches files in nested directories with **', () => {
+  const files = [
+    mkFile('packages/web/package-lock.json'),
+    mkFile('packages/cli/package-lock.json'),
+    mkFile('packages/web/src/index.ts'),
+  ];
+  const kept = filterIgnoredPaths(files, ['**/package-lock.json']).map((f) => f.filename);
+  assert.deepEqual(kept, ['packages/web/src/index.ts']);
+});
+
+test('filterIgnoredPaths normalises backslashes to forward slashes', () => {
+  // Octokit returns forward slashes on the wire, but guard against host-platform paths.
+  const files = [mkFile('src/a.ts'), mkFile('vendor\\b\\c.go')];
+  const kept = filterIgnoredPaths(files, ['**/vendor/**']).map((f) => f.filename);
+  assert.deepEqual(kept, ['src/a.ts']);
 });
