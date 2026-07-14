@@ -1,6 +1,6 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
-import { loadConfig } from './config';
+import { loadConfig, Config } from './config';
 import { commitStatusFor, GitHubClient } from './github';
 import { LLMClient } from './llm';
 import { applyCustomRules, buildBatchPrompt, buildFilePrompt, SYSTEM_PROMPT } from './prompts';
@@ -11,6 +11,7 @@ import {
   parsePullRequestFiles,
 } from './diff';
 import { Finding, FileDiff } from './types';
+import { shouldLog } from './verbosity';
 
 const MAX_DIFF_CHARS = 12000;
 const SMALL_FILE_THRESHOLD = 8000;
@@ -24,8 +25,10 @@ async function run(): Promise<void> {
     const gh = new GitHubClient(config.githubToken, context);
     const llm = new LLMClient(config);
 
-    core.info(`Reviewing PR #${context.prNumber}: ${context.prTitle}`);
-    core.info(`Using model: ${config.model} @ ${config.apiUrl}`);
+    if (shouldLog('normal', config)) {
+      core.info(`Reviewing PR #${context.prNumber}: ${context.prTitle}`);
+      core.info(`Using model: ${config.model} @ ${config.apiUrl}`);
+    }
 
     // Check skip label
     if (await gh.hasSkipLabel(config.skipLabel)) {
@@ -36,7 +39,9 @@ async function run(): Promise<void> {
     // Fetch PR files
     const files = await fetchFiles(config, context);
     if (files.length === 0) {
-      core.info('No files to review.');
+      if (shouldLog('normal', config)) {
+        core.info('No files to review.');
+      }
       return;
     }
 
@@ -49,16 +54,22 @@ async function run(): Promise<void> {
       reviewFiles = filterIgnoredPaths(files, config.ignorePaths);
       const dropped = before - reviewFiles.length;
       if (dropped > 0) {
-        core.info(`Ignored ${dropped} file(s) matching ignore-paths (kept ${reviewFiles.length}).`);
+        if (shouldLog('normal', config)) {
+          core.info(`Ignored ${dropped} file(s) matching ignore-paths (kept ${reviewFiles.length}).`);
+        }
       }
       reviewFiles = reviewFiles.slice(0, config.maxFiles);
       if (reviewFiles.length === 0) {
-        core.info('All files were filtered by ignore-paths; nothing to review.');
+        if (shouldLog('normal', config)) {
+          core.info('All files were filtered by ignore-paths; nothing to review.');
+        }
         return;
       }
     }
 
-    core.info(`Found ${reviewFiles.length} file(s) to review (max-files: ${config.maxFiles}).`);
+    if (shouldLog('normal', config)) {
+      core.info(`Found ${reviewFiles.length} file(s) to review (max-files: ${config.maxFiles}).`);
+    }
 
     // Build prompts
     const systemPrompt = applyCustomRules(SYSTEM_PROMPT, config.customRules);
@@ -69,7 +80,9 @@ async function run(): Promise<void> {
     const allFindings: Finding[] = [];
     for (let i = 0; i < batches.length; i++) {
       const batch = batches[i];
-      core.info(`Reviewing batch ${i + 1}/${batches.length} (${batch.length} file${batch.length === 1 ? '' : 's'})...`);
+      if (shouldLog('normal', config)) {
+        core.info(`Reviewing batch ${i + 1}/${batches.length} (${batch.length} file${batch.length === 1 ? '' : 's'})...`);
+      }
       try {
         const prompt =
           batch.length === 1 && batch[0].patch && batch[0].patch.length > MAX_DIFF_CHARS
@@ -78,21 +91,27 @@ async function run(): Promise<void> {
 
         const review = await llm.review(systemPrompt, prompt);
         allFindings.push(...review.findings);
-        core.info(`  → ${review.findings.length} findings`);
+        if (shouldLog('normal', config)) {
+          core.info(`  → ${review.findings.length} findings`);
+        }
       } catch (err: any) {
         core.warning(`Batch ${i + 1} failed: ${err.message}`);
       }
     }
 
     // Validate line numbers against actual diff
-    const validated = validateLineNumbers(allFindings, reviewFiles);
+    const validated = validateLineNumbers(allFindings, reviewFiles, config);
     const criticalCount = validated.filter((f) => f.severity === 'critical').length;
     const warningCount = validated.filter((f) => f.severity === 'warning').length;
 
-    core.info(`Total validated findings: ${validated.length} (${criticalCount} critical, ${warningCount} warnings)`);
+    if (shouldLog('normal', config)) {
+      core.info(`Total validated findings: ${validated.length} (${criticalCount} critical, ${warningCount} warnings)`);
+    }
 
     if (validated.length === 0) {
-      core.info('No actionable findings. Posting a thumbs-up summary.');
+      if (shouldLog('normal', config)) {
+        core.info('No actionable findings. Posting a thumbs-up summary.');
+      }
       const { reviewId } = await gh.postFindings([], config.commentMode);
       if (reviewId) core.setOutput('review-id', reviewId);
       core.setOutput('findings-count', 0);
@@ -119,7 +138,9 @@ async function run(): Promise<void> {
       core.warning(`Commit status update failed: ${err.message}`);
     }
 
-    core.info(`✅ Posted ${posted} of ${validated.length} findings.`);
+    if (shouldLog('normal', config)) {
+      core.info(`✅ Posted ${posted} of ${validated.length} findings.`);
+    }
     if (c > 0) {
       core.warning(`Found ${c} critical issue${c === 1 ? '' : 's'}.`);
     }
@@ -172,7 +193,7 @@ function createBatches(files: FileDiff[]): FileDiff[][] {
   return batches;
 }
 
-function validateLineNumbers(findings: Finding[], files: FileDiff[]): Finding[] {
+function validateLineNumbers(findings: Finding[], files: FileDiff[], config: Config): Finding[] {
   const fileMap = new Map<string, FileDiff>();
   for (const f of files) fileMap.set(f.filename, f);
 
@@ -180,14 +201,18 @@ function validateLineNumbers(findings: Finding[], files: FileDiff[]): Finding[] 
     .map((f) => {
       const file = fileMap.get(f.file);
       if (!file) {
-        core.debug(`Dropping finding for unknown file: ${f.file}`);
+        if (shouldLog('detailed', config)) {
+          core.info(`Dropping finding for unknown file: ${f.file}`);
+        }
         return null;
       }
       if (f.line === undefined) return f;
       const addedLines = extractAddedLines(file.patch);
       const maxLine = addedLines.length > 0 ? Math.max(...addedLines.map((a) => a.line)) : 0;
       if (f.line > maxLine && maxLine > 0) {
-        core.debug(`Line ${f.line} out of range for ${f.file} (max: ${maxLine})`);
+        if (shouldLog('detailed', config)) {
+          core.info(`Line ${f.line} out of range for ${f.file} (max: ${maxLine})`);
+        }
         return { ...f, line: undefined };
       }
       return f;
