@@ -36152,6 +36152,7 @@ const github_1 = __nccwpck_require__(9248);
 const llm_1 = __nccwpck_require__(1908);
 const prompts_1 = __nccwpck_require__(6224);
 const diff_1 = __nccwpck_require__(9952);
+const verbosity_1 = __nccwpck_require__(4426);
 const MAX_DIFF_CHARS = 12000;
 const SMALL_FILE_THRESHOLD = 8000;
 async function run() {
@@ -36161,8 +36162,10 @@ async function run() {
         const context = (0, diff_1.buildReviewContext)(github.context.payload);
         const gh = new github_1.GitHubClient(config.githubToken, context);
         const llm = new llm_1.LLMClient(config);
-        core.info(`Reviewing PR #${context.prNumber}: ${context.prTitle}`);
-        core.info(`Using model: ${config.model} @ ${config.apiUrl}`);
+        if ((0, verbosity_1.shouldLog)('normal', config)) {
+            core.info(`Reviewing PR #${context.prNumber}: ${context.prTitle}`);
+            core.info(`Using model: ${config.model} @ ${config.apiUrl}`);
+        }
         // Check skip label
         if (await gh.hasSkipLabel(config.skipLabel)) {
             core.info(`PR has '${config.skipLabel}' label — skipping review.`);
@@ -36171,7 +36174,9 @@ async function run() {
         // Fetch PR files
         const files = await fetchFiles(config, context);
         if (files.length === 0) {
-            core.info('No files to review.');
+            if ((0, verbosity_1.shouldLog)('normal', config)) {
+                core.info('No files to review.');
+            }
             return;
         }
         // Apply ignore-paths filter before the max-files cap is reached.
@@ -36183,15 +36188,21 @@ async function run() {
             reviewFiles = (0, diff_1.filterIgnoredPaths)(files, config.ignorePaths);
             const dropped = before - reviewFiles.length;
             if (dropped > 0) {
-                core.info(`Ignored ${dropped} file(s) matching ignore-paths (kept ${reviewFiles.length}).`);
+                if ((0, verbosity_1.shouldLog)('normal', config)) {
+                    core.info(`Ignored ${dropped} file(s) matching ignore-paths (kept ${reviewFiles.length}).`);
+                }
             }
             reviewFiles = reviewFiles.slice(0, config.maxFiles);
             if (reviewFiles.length === 0) {
-                core.info('All files were filtered by ignore-paths; nothing to review.');
+                if ((0, verbosity_1.shouldLog)('normal', config)) {
+                    core.info('All files were filtered by ignore-paths; nothing to review.');
+                }
                 return;
             }
         }
-        core.info(`Found ${reviewFiles.length} file(s) to review (max-files: ${config.maxFiles}).`);
+        if ((0, verbosity_1.shouldLog)('normal', config)) {
+            core.info(`Found ${reviewFiles.length} file(s) to review (max-files: ${config.maxFiles}).`);
+        }
         // Build prompts
         const systemPrompt = (0, prompts_1.applyCustomRules)(prompts_1.SYSTEM_PROMPT, config.customRules);
         // Decide batching: send small files together, large ones one at a time
@@ -36199,26 +36210,34 @@ async function run() {
         const allFindings = [];
         for (let i = 0; i < batches.length; i++) {
             const batch = batches[i];
-            core.info(`Reviewing batch ${i + 1}/${batches.length} (${batch.length} file${batch.length === 1 ? '' : 's'})...`);
+            if ((0, verbosity_1.shouldLog)('normal', config)) {
+                core.info(`Reviewing batch ${i + 1}/${batches.length} (${batch.length} file${batch.length === 1 ? '' : 's'})...`);
+            }
             try {
                 const prompt = batch.length === 1 && batch[0].patch && batch[0].patch.length > MAX_DIFF_CHARS
                     ? (0, prompts_1.buildFilePrompt)(context, batch[0])
                     : (0, prompts_1.buildBatchPrompt)(context, batch);
                 const review = await llm.review(systemPrompt, prompt);
                 allFindings.push(...review.findings);
-                core.info(`  → ${review.findings.length} findings`);
+                if ((0, verbosity_1.shouldLog)('normal', config)) {
+                    core.info(`  → ${review.findings.length} findings`);
+                }
             }
             catch (err) {
                 core.warning(`Batch ${i + 1} failed: ${err.message}`);
             }
         }
         // Validate line numbers against actual diff
-        const validated = validateLineNumbers(allFindings, reviewFiles);
+        const validated = validateLineNumbers(allFindings, reviewFiles, config);
         const criticalCount = validated.filter((f) => f.severity === 'critical').length;
         const warningCount = validated.filter((f) => f.severity === 'warning').length;
-        core.info(`Total validated findings: ${validated.length} (${criticalCount} critical, ${warningCount} warnings)`);
+        if ((0, verbosity_1.shouldLog)('normal', config)) {
+            core.info(`Total validated findings: ${validated.length} (${criticalCount} critical, ${warningCount} warnings)`);
+        }
         if (validated.length === 0) {
-            core.info('No actionable findings. Posting a thumbs-up summary.');
+            if ((0, verbosity_1.shouldLog)('normal', config)) {
+                core.info('No actionable findings. Posting a thumbs-up summary.');
+            }
             const { reviewId } = await gh.postFindings([], config.commentMode);
             if (reviewId)
                 core.setOutput('review-id', reviewId);
@@ -36246,7 +36265,9 @@ async function run() {
         catch (err) {
             core.warning(`Commit status update failed: ${err.message}`);
         }
-        core.info(`✅ Posted ${posted} of ${validated.length} findings.`);
+        if ((0, verbosity_1.shouldLog)('normal', config)) {
+            core.info(`✅ Posted ${posted} of ${validated.length} findings.`);
+        }
         if (c > 0) {
             core.warning(`Found ${c} critical issue${c === 1 ? '' : 's'}.`);
         }
@@ -36299,7 +36320,7 @@ function createBatches(files) {
         batches.push(current);
     return batches;
 }
-function validateLineNumbers(findings, files) {
+function validateLineNumbers(findings, files, config) {
     const fileMap = new Map();
     for (const f of files)
         fileMap.set(f.filename, f);
@@ -36307,7 +36328,9 @@ function validateLineNumbers(findings, files) {
         .map((f) => {
         const file = fileMap.get(f.file);
         if (!file) {
-            core.debug(`Dropping finding for unknown file: ${f.file}`);
+            if ((0, verbosity_1.shouldLog)('detailed', config)) {
+                core.info(`Dropping finding for unknown file: ${f.file}`);
+            }
             return null;
         }
         if (f.line === undefined)
@@ -36315,7 +36338,9 @@ function validateLineNumbers(findings, files) {
         const addedLines = (0, diff_1.extractAddedLines)(file.patch);
         const maxLine = addedLines.length > 0 ? Math.max(...addedLines.map((a) => a.line)) : 0;
         if (f.line > maxLine && maxLine > 0) {
-            core.debug(`Line ${f.line} out of range for ${f.file} (max: ${maxLine})`);
+            if ((0, verbosity_1.shouldLog)('detailed', config)) {
+                core.info(`Line ${f.line} out of range for ${f.file} (max: ${maxLine})`);
+            }
             return { ...f, line: undefined };
         }
         return f;
@@ -36526,6 +36551,32 @@ function applyCustomRules(base, customRules) {
     if (!customRules || !customRules.trim())
         return base;
     return `${base}\n\nAdditional project-specific rules (highest priority):\n${customRules.trim()}`;
+}
+
+
+/***/ }),
+
+/***/ 4426:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.shouldLog = shouldLog;
+const RANK = {
+    quiet: 0,
+    normal: 1,
+    detailed: 2,
+};
+/**
+ * Decide whether a log line at `level` should fire given the configured
+ * verbosity. `level` is the minimum verbosity the message should appear at:
+ *   - 'quiet'    → always shown
+ *   - 'normal'   → hidden only when verbosity is 'quiet'
+ *   - 'detailed' → only shown when verbosity is 'detailed'
+ */
+function shouldLog(level, config) {
+    return RANK[config.verbosity] >= RANK[level];
 }
 
 
